@@ -1,91 +1,104 @@
 const User = require('../models/user')
-const Order = require('../models/order')
+const { check, validationResult } = require('express-validator')
+var jwt = require('jsonwebtoken')
+var expressJwt = require('express-jwt')
 
-exports.getUserById = (req, res, next, id) => {
-  User.findById(id).exec((e, user) => {
-    if (e || !user) {
+exports.signup = (req, res) => {
+  // console.log("REQ BODY", req.body)
+  // res.json({
+  //     message:'signup'
+  // })
+
+  const errors = validationResult(req)
+
+  if (!errors.isEmpty()) {
+    return res.status(422).json({
+      error: errors.array()[0].msg,
+    })
+  }
+
+  const user = new User(req.body)
+  user.save((err, user) => {
+    if (err) {
       return res.status(400).json({
-        error: 'No user was found in DB',
+        err: 'NOT able to save user in DB',
       })
     }
-    req.profile = user
-    next()
+    res.json({
+      name: user.name,
+      email: user.email,
+      id: user._id,
+    })
+  })
+}
+
+exports.signin = (req, res) => {
+  const { email, password } = req.body
+  const errors = validationResult(req)
+  if (!errors.isEmpty()) {
+    return res.status(422).json({
+      error: errors.array()[0].msg,
+    })
+  }
+
+  User.findOne({ email }, (e, user) => {
+    if (e || !user) {
+      return res.status(400).json({
+        error: 'User email doesnt exist in database',
+      })
+    }
+
+    if (!user.authenticate(password)) {
+      return res.status(401).json({
+        error: 'Email and password do not match',
+      })
+    }
+
+    //create token
+
+    const token = jwt.sign({ _id: user._id }, process.env.SECRET)
+    //put token in cookie
+
+    res.cookie('token', token, { expire: new Date() + 9999 })
+
+    //send response to front end
+    const { _id, name, email, role } = user
+    return res.json({ token, user: { _id, name, email, role } })
   })
 }
 
-exports.getUser = (req, res) => {
-  //TODO: get back hear for password
-  req.profile.salt = undefined
-  req.profile.createdAt = undefined
-  req.profile.updatedAt = undefined
-  req.profile.encry_password = undefined
-  return res.json(req.profile)
-}
-
-exports.updateUser = (req, res) => {
-  User.findByIdAndUpdate(
-    {
-      _id: req.profile._id,
-    },
-    { $set: req.body },
-    { new: true, useFindAndModify: false },
-    (e, user) => {
-      if (e) {
-        return res.status(400).json({
-          error: 'you are not authorised to update this user',
-        })
-      }
-
-      user.salt = undefined
-      user.createdAt = undefined
-      user.updatedAt = undefined
-      user.encry_password = undefined
-
-      return res.json(user)
-    }
-  )
-}
-
-exports.userPurchaseList = (req, res) => {
-  Order.find({ user: req.profile._id })
-    .populate('user', '_id name')
-    .exec((e, order) => {
-      if (e) {
-        return res.status(400).json({
-          error: 'No order in this account',
-        })
-      }
-      return res.json(order)
-    })
-}
-
-exports.pushOrderInPurchaseList = (req, res, next) => {
-  let purchases = []
-  req.body.order.products.forEach((item) => {
-    purchases.push({
-      _id: item._id,
-      name: item.name,
-      description: item.description,
-      category: item.category,
-      quantity: item.quantity,
-      amount: req.body.order.amount,
-      transaction_id: req.body.order.transaction_id,
-    })
+exports.signout = (req, res) => {
+    res.clearCookie("token");
+  res.json({
+    message: 'signout success',
   })
+}
 
-  //store in DB
-  User.findOneAndUpdate(
-    {_id: req.profile._id},
-    {$push:{purchases:purchases}},
-    {new: true},
-    (e,purchases)=>{
-      if(e){
-        return res.status(400).json({
-          error: 'unable to save purchase list',
-        })
-      }
-      next()
-    }
-  )
-  
+//protected routes
+
+
+exports.isSignedin=expressJwt({
+    secret:process.env.SECRET,
+    userProperty:"auth",
+    algorithms: ['HS256']
+})
+
+//custom middile wares
+
+exports.isAuthenticated=(req,res,next)=>{
+  //console.log(req.auth);
+  let checker=req.profile && req.auth && req.profile.__id ==req.auth.__id
+  if(!checker){
+    return res.status(403).json({
+      error:"ACCESS DENIED"
+    })
+  }
+  next()
+}
+
+exports.isAdmin=(req,res,next)=>{
+  if(req.profile.role===0){
+    return res.status(403).json({error:"YOU ARE NOT ADMIN"})
+  }
+  next()
 }
